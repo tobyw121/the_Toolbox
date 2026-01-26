@@ -5,10 +5,10 @@ import subprocess
 import urllib.request
 import time
 import random
+import shutil  # WICHTIG: Zum Löschen von Ordnern
 
 gi.require_version('Gtk', '3.0')
 
-# Versuch, AppIndicator zu laden
 try:
     gi.require_version('AppIndicator3', '0.1')
     from gi.repository import AppIndicator3
@@ -63,7 +63,7 @@ class SystemTrayIcon:
         self.indicator.set_menu(self.build_menu())
 
         # --- AUTOMATISCHER UPDATER ---
-        print(f"Starte Auto-Update (Cache-Busting aktiv) alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
+        print(f"Starte Auto-Update (Cache-Cleanup aktiv) alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
         GLib.timeout_add(UPDATE_INTERVAL_SECONDS * 1000, self.auto_update_task)
 
     def get_raw_base_url(self, url, branch):
@@ -125,33 +125,32 @@ class SystemTrayIcon:
         updated_files = []
         errors = []
         restart_needed = False
+        
+        # 1. Netzwerk-Cache bereinigen
+        urllib.request.urlcleanup()
 
         if not silent:
             self.show_notification("Update", "Prüfe auf Änderungen...")
 
         for filename in FILES_TO_SYNC:
-            # TRICK: Wir hängen eine zufällige Zahl an (?t=1234567)
-            # Das zwingt GitHub/Proxies dazu, die Datei NEU zu laden und nicht aus dem Cache.
+            # Cache-Busting per URL (Timestamp)
             timestamp = int(time.time())
             remote_url = f"{self.base_url}{filename}?t={timestamp}"
-            
             local_path = os.path.join(self.script_dir, filename)
 
             try:
-                # 1. DOWNLOAD
+                # DOWNLOAD
                 with urllib.request.urlopen(remote_url, timeout=5) as response:
                     remote_data = response.read()
 
-                # 2. VERIFIZIERUNG
-                if len(remote_data) == 0:
-                    continue # Überspringen, wenn leer (Netzwerkfehler?)
+                if len(remote_data) == 0: continue
                 
                 # HTML Schutz
                 if b"<!doctype html>" in remote_data[:50].lower() or b"<html" in remote_data[:50].lower():
-                    print(f"Warnung: HTML für {filename} empfangen. URL prüfen.")
+                    print(f"Warnung: HTML empfangen bei {filename}")
                     continue
 
-                # 3. VERGLEICH
+                # VERGLEICH
                 local_data = b""
                 if os.path.exists(local_path):
                     with open(local_path, 'rb') as f:
@@ -171,15 +170,20 @@ class SystemTrayIcon:
                         restart_needed = True
 
             except Exception as e:
-                # Im Silent-Modus nicht spammen, nur ins Terminal drucken
                 print(f"Fehler bei {filename}: {e}")
                 if not silent: errors.append(filename)
 
-        # BERICHT
+        # BERICHT & NEUSTART
         if updated_files:
             msg = f"Aktualisiert: {', '.join(updated_files)}"
+            
             if restart_needed:
-                self.show_notification("Update", "Toolbox aktualisiert sich neu!")
+                self.show_notification("Update", "Neustart zur Installation...")
+                
+                # --- CACHE CLEANUP VOR DEM NEUSTART ---
+                self.clean_local_cache()
+                # --------------------------------------
+                
                 time.sleep(1)
                 python = sys.executable
                 os.execl(python, python, *sys.argv)
@@ -187,10 +191,31 @@ class SystemTrayIcon:
                 self.show_notification("Update erfolgreich", msg)
         
         elif not silent and errors:
-            self.show_notification("Fehler", "Probleme beim Laden. Siehe Terminal.")
+            self.show_notification("Fehler", "Probleme beim Laden.")
         
         elif not silent:
-            self.show_notification("Alles aktuell", "Keine neuen Versionen gefunden.")
+            self.show_notification("Alles aktuell", "Keine neuen Versionen.")
+
+    def clean_local_cache(self):
+        """Löscht __pycache__ und temporäre Dateien, um sauberen Neustart zu garantieren."""
+        print("Bereinige System-Cache...")
+        
+        # 1. __pycache__ Ordner löschen
+        pycache_path = os.path.join(self.script_dir, "__pycache__")
+        if os.path.exists(pycache_path):
+            try:
+                shutil.rmtree(pycache_path)
+                print(f"Gelöscht: {pycache_path}")
+            except Exception as e:
+                print(f"Fehler beim Löschen von pycache: {e}")
+
+        # 2. Falls Python Bytecode-Dateien (.pyc) direkt im Ordner liegen
+        for file in os.listdir(self.script_dir):
+            if file.endswith(".pyc"):
+                try:
+                    os.remove(os.path.join(self.script_dir, file))
+                except:
+                    pass
 
     def show_notification(self, title, message):
         try:
