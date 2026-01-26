@@ -1,18 +1,32 @@
 import gi
-gi.require_version('Gtk', '3.0')
-gi.require_version('AppIndicator3', '0.1')
-from gi.repository import Gtk, AppIndicator3, GObject
-import subprocess
 import os
 import sys
+import subprocess
 import urllib.request
+import time
+
+gi.require_version('Gtk', '3.0')
+
+# Versuch, AppIndicator zu laden
+try:
+    gi.require_version('AppIndicator3', '0.1')
+    from gi.repository import AppIndicator3
+except ValueError:
+    try:
+        gi.require_version('AyatanaAppIndicator3', '0.1')
+        from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+    except ValueError:
+        print("FEHLER: AppIndicator Bibliothek fehlt.")
+        sys.exit(1)
+
+# WICHTIG: GLib importieren statt nur GObject
+from gi.repository import Gtk, GLib
 
 # --- KONFIGURATION ---
-# Einfach den Link kopieren, den du im Browser siehst, wenn du auf dein Repo gehst:
 REPO_URL = "https://github.com/tobyw121/the_Toolbox"
-BRANCH = "main" 
+BRANCH = "main"
+UPDATE_INTERVAL_SECONDS = 20
 
-# Liste der Dateien, die exakt so im Repo liegen müssen:
 FILES_TO_SYNC = [
     "update.sh",
     "nmcli.sh",
@@ -26,11 +40,9 @@ FILES_TO_SYNC = [
 class SystemTrayIcon:
     def __init__(self):
         self.app = 'System_Icon'
-        
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
         self.script_name = os.path.basename(__file__)
         
-        # Automatische URL-Korrektur (Github Web -> Raw)
         self.base_url = self.get_raw_base_url(REPO_URL, BRANCH)
         print(f"Update-Server: {self.base_url}")
 
@@ -38,12 +50,10 @@ class SystemTrayIcon:
             FILES_TO_SYNC.append(self.script_name)
 
         self.icon_path = os.path.join(self.script_dir, 'icon.png')
-
-        # Icon Fallback
         if os.path.exists(self.icon_path):
             icon_arg = self.icon_path
         else:
-            icon_arg = "system-run"
+            icon_arg = "preferences-system"
 
         self.indicator = AppIndicator3.Indicator.new(
             self.app, icon_arg,
@@ -52,35 +62,31 @@ class SystemTrayIcon:
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_menu(self.build_menu())
 
-    def get_raw_base_url(self, url, branch):
-        """Wandelt normale GitHub-URLs in Raw-URLs um."""
-        url = url.strip()
-        # Entferne .git Endung falls vorhanden
-        if url.endswith(".git"):
-            url = url[:-4]
+        # --- AUTOMATISCHER UPDATER ---
+        print(f"Starte Auto-Update alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
         
-        # Entferne abschließenden Slash
-        if url.endswith("/"):
-            url = url[:-1]
+        # KORREKTUR: GLib statt GObject nutzen
+        # GLib.timeout_add nimmt Millisekunden (daher * 1000)
+        GLib.timeout_add(UPDATE_INTERVAL_SECONDS * 1000, self.auto_update_task)
 
-        # Wenn es schon eine raw-URL ist: Super.
+    def get_raw_base_url(self, url, branch):
+        url = url.strip()
+        if url.endswith(".git"): url = url[:-4]
+        if url.endswith("/"): url = url[:-1]
+        
         if "raw.githubusercontent.com" in url:
             return url + "/"
         
-        # Wenn es eine normale github.com URL ist, umbauen
         if "github.com" in url:
-            # Ersetzt github.com durch raw.githubusercontent.com
-            # Struktur: https://github.com/USER/REPO -> https://raw.githubusercontent.com/USER/REPO/main/
             raw_url = url.replace("github.com", "raw.githubusercontent.com")
             return f"{raw_url}/{branch}/"
-            
         return url + "/"
 
     def build_menu(self):
         menu = Gtk.Menu()
 
-        item_app_update = Gtk.MenuItem(label='Toolbox synchronisieren')
-        item_app_update.connect('activate', self.download_updates)
+        item_app_update = Gtk.MenuItem(label='Jetzt manuell prüfen')
+        item_app_update.connect('activate', lambda x: self.perform_update(silent=False))
         menu.append(item_app_update)
 
         menu.append(Gtk.SeparatorMenuItem())
@@ -114,61 +120,72 @@ class SystemTrayIcon:
         menu.show_all()
         return menu
 
-    def download_updates(self, source):
+    def auto_update_task(self):
+        self.perform_update(silent=True)
+        return True 
+
+    def perform_update(self, silent=True):
         updated_files = []
         errors = []
-        needs_restart = False
+        restart_needed = False
 
-        self.show_notification("Update gestartet", f"Prüfe {self.base_url}...")
+        if not silent:
+            self.show_notification("Update", "Prüfe auf Änderungen...")
 
         for filename in FILES_TO_SYNC:
             remote_url = self.base_url + filename
             local_path = os.path.join(self.script_dir, filename)
 
             try:
-                # Timeout hinzugefügt, falls kein Internet da ist
-                with urllib.request.urlopen(remote_url, timeout=10) as response:
+                with urllib.request.urlopen(remote_url, timeout=5) as response:
                     remote_data = response.read()
 
-                local_data = None
+                if len(remote_data) == 0:
+                    raise ValueError("Datei ist leer.")
+                
+                if b"<!doctype html>" in remote_data[:50].lower() or b"<html" in remote_data[:50].lower():
+                    raise ValueError("HTML empfangen statt Code.")
+
+                local_data = b""
                 if os.path.exists(local_path):
                     with open(local_path, 'rb') as f:
                         local_data = f.read()
 
                 if local_data != remote_data:
+                    print(f"Änderung erkannt bei: {filename}")
                     with open(local_path, 'wb') as f:
                         f.write(remote_data)
-                    updated_files.append(filename)
-                    print(f"Aktualisiert: {filename}")
-                    
-                    if filename == self.script_name:
-                        needs_restart = True
                     
                     if filename.endswith(".sh"):
                         os.chmod(local_path, 0o755)
 
-            except urllib.error.HTTPError as e:
-                # 404 bedeutet Datei nicht im Repo gefunden -> Ignorieren oder Fehler melden
-                print(f"Datei nicht gefunden (404): {filename}")
-                errors.append(filename)
+                    updated_files.append(filename)
+                    
+                    if filename == self.script_name:
+                        restart_needed = True
+
             except Exception as e:
                 print(f"Fehler bei {filename}: {e}")
-                errors.append(filename)
+                errors.append(f"{filename}")
 
-        if updated_files:
+        if errors:
+             if not silent: 
+                self.show_notification("Update Fehler", f"Konnte nicht laden: {errors[0]}...")
+             else:
+                print(f"Auto-Update Fehler: {errors}")
+
+        elif updated_files:
             msg = f"Aktualisiert: {', '.join(updated_files)}"
-            if needs_restart:
-                self.show_notification("Neustart", "Hauptprogramm wurde aktualisiert.")
-                import time
+            if restart_needed:
+                self.show_notification("Update", "Programm aktualisiert. Neustart...")
                 time.sleep(1)
                 python = sys.executable
                 os.execl(python, python, *sys.argv)
             else:
-                self.show_notification("Erfolg", msg)
-        elif errors:
-            self.show_notification("Warnung", "Einige Dateien konnten nicht geladen werden.")
-        else:
-            self.show_notification("Aktuell", "Keine Updates verfügbar.")
+                self.show_notification("Update", msg)
+        
+        elif not silent:
+            self.show_notification("Alles aktuell", "Keine Änderungen gefunden.")
 
     def show_notification(self, title, message):
         try:
@@ -186,14 +203,11 @@ class SystemTrayIcon:
             else:
                 subprocess.Popen(['xterm', '-e', 'sudo', 'bash', full_path])
         except FileNotFoundError:
-            print(f"Fehler: Skript '{full_path}' nicht gefunden.")
+            print(f"Datei fehlt: {full_path}")
 
     def run_python_script(self, source, script_name):
         full_path = os.path.join(self.script_dir, script_name)
-        try:
-            subprocess.Popen(['python3', full_path])
-        except FileNotFoundError:
-            print(f"Fehler: Skript '{full_path}' nicht gefunden.")
+        subprocess.Popen(['python3', full_path])
 
 if __name__ == "__main__":
     try:
