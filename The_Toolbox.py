@@ -5,7 +5,7 @@ import subprocess
 import urllib.request
 import time
 import random
-import shutil  # WICHTIG: Zum Löschen von Ordnern
+import shutil  ## WICHTIG: Zum Löschen von Ordnern
 
 gi.require_version('Gtk', '3.0')
 
