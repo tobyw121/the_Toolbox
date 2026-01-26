@@ -24,4 +24,4 @@ echo "NetworkManager-Applet wurde neu gestartet."
 
 
 echo "VPN getrennt ."
-nmcli connection down wg
+nmcli connection down wg1
