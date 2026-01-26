@@ -4,6 +4,7 @@ import sys
 import subprocess
 import urllib.request
 import time
+import random
 
 gi.require_version('Gtk', '3.0')
 
@@ -19,7 +20,6 @@ except ValueError:
         print("FEHLER: AppIndicator Bibliothek fehlt.")
         sys.exit(1)
 
-# WICHTIG: GLib importieren statt nur GObject
 from gi.repository import Gtk, GLib
 
 # --- KONFIGURATION ---
@@ -63,10 +63,7 @@ class SystemTrayIcon:
         self.indicator.set_menu(self.build_menu())
 
         # --- AUTOMATISCHER UPDATER ---
-        print(f"Starte Auto-Update alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
-        
-        # KORREKTUR: GLib statt GObject nutzen
-        # GLib.timeout_add nimmt Millisekunden (daher * 1000)
+        print(f"Starte Auto-Update (Cache-Busting aktiv) alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
         GLib.timeout_add(UPDATE_INTERVAL_SECONDS * 1000, self.auto_update_task)
 
     def get_raw_base_url(self, url, branch):
@@ -133,26 +130,35 @@ class SystemTrayIcon:
             self.show_notification("Update", "Prüfe auf Änderungen...")
 
         for filename in FILES_TO_SYNC:
-            remote_url = self.base_url + filename
+            # TRICK: Wir hängen eine zufällige Zahl an (?t=1234567)
+            # Das zwingt GitHub/Proxies dazu, die Datei NEU zu laden und nicht aus dem Cache.
+            timestamp = int(time.time())
+            remote_url = f"{self.base_url}{filename}?t={timestamp}"
+            
             local_path = os.path.join(self.script_dir, filename)
 
             try:
+                # 1. DOWNLOAD
                 with urllib.request.urlopen(remote_url, timeout=5) as response:
                     remote_data = response.read()
 
+                # 2. VERIFIZIERUNG
                 if len(remote_data) == 0:
-                    raise ValueError("Datei ist leer.")
+                    continue # Überspringen, wenn leer (Netzwerkfehler?)
                 
+                # HTML Schutz
                 if b"<!doctype html>" in remote_data[:50].lower() or b"<html" in remote_data[:50].lower():
-                    raise ValueError("HTML empfangen statt Code.")
+                    print(f"Warnung: HTML für {filename} empfangen. URL prüfen.")
+                    continue
 
+                # 3. VERGLEICH
                 local_data = b""
                 if os.path.exists(local_path):
                     with open(local_path, 'rb') as f:
                         local_data = f.read()
 
                 if local_data != remote_data:
-                    print(f"Änderung erkannt bei: {filename}")
+                    print(f"!!! UPDATE GEFUNDEN: {filename} !!!")
                     with open(local_path, 'wb') as f:
                         f.write(remote_data)
                     
@@ -165,27 +171,26 @@ class SystemTrayIcon:
                         restart_needed = True
 
             except Exception as e:
+                # Im Silent-Modus nicht spammen, nur ins Terminal drucken
                 print(f"Fehler bei {filename}: {e}")
-                errors.append(f"{filename}")
+                if not silent: errors.append(filename)
 
-        if errors:
-             if not silent: 
-                self.show_notification("Update Fehler", f"Konnte nicht laden: {errors[0]}...")
-             else:
-                print(f"Auto-Update Fehler: {errors}")
-
-        elif updated_files:
+        # BERICHT
+        if updated_files:
             msg = f"Aktualisiert: {', '.join(updated_files)}"
             if restart_needed:
-                self.show_notification("Update", "Programm aktualisiert. Neustart...")
+                self.show_notification("Update", "Toolbox aktualisiert sich neu!")
                 time.sleep(1)
                 python = sys.executable
                 os.execl(python, python, *sys.argv)
             else:
-                self.show_notification("Update", msg)
+                self.show_notification("Update erfolgreich", msg)
+        
+        elif not silent and errors:
+            self.show_notification("Fehler", "Probleme beim Laden. Siehe Terminal.")
         
         elif not silent:
-            self.show_notification("Alles aktuell", "Keine Änderungen gefunden.")
+            self.show_notification("Alles aktuell", "Keine neuen Versionen gefunden.")
 
     def show_notification(self, title, message):
         try:
