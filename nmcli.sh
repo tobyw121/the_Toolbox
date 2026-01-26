@@ -5,7 +5,7 @@
 
 # NetworkManager neu starten
 sudo systemctl restart NetworkManager
-echo "NetworkManager wurde neu gestartet."
+echo "NetworkManagerr wurde neu gestartet."
 
 # networking neu starten
 sudo systemctl restart networking.service
