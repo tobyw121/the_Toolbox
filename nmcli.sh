@@ -5,7 +5,7 @@
 
 # NetworkManager neu starten
 sudo systemctl restart NetworkManager
-echo "NetworkManagerr wurde neu gestartet."
+echo "NetworkManager wurde neu gestartet."
 
 # networking neu starten
 sudo systemctl restart networking.service
@@ -24,4 +24,4 @@ echo "NetworkManager-Applet wurde neu gestartet."
 
 
 echo "VPN getrennt ."
-nmcli connection down wg1
+nmcli connection down wg
