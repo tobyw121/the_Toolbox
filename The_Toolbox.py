@@ -104,7 +104,7 @@ class SystemTrayIcon:
 
         item_wine = Gtk.MenuItem(label='NVIDIA_reinstaller')
         item_wine.connect('activate', self.run_script_in_terminal, 'nvidia.sh')
-        menu.append(item_wine)
+        menu.append(item_nvidia)
 
         item_cpu_gpu = Gtk.MenuItem(label='CPU-GPU')
         item_cpu_gpu.connect('activate', self.run_python_script, 'cpu-gpu.py')
