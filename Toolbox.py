@@ -6,7 +6,7 @@ import subprocess
 import urllib.request
 import time
 import random
-import shutil  ## WICHTIG: Zum Löschen von Ordnern
+import shutil  
 
 gi.require_version('Gtk', '3.0')
 
@@ -27,6 +27,7 @@ from gi.repository import Gtk, GLib
 REPO_URL = "https://github.com/tobyw121/the_Toolbox"
 BRANCH = "main"
 UPDATE_INTERVAL_SECONDS = 20
+ENABLE_AUTO_UPDATE = False  # Setze auf True, um Auto-Update zu aktivieren
 
 FILES_TO_SYNC = [
     "update.sh",
@@ -65,8 +66,11 @@ class SystemTrayIcon:
         self.indicator.set_menu(self.build_menu())
 
         # --- AUTOMATISCHER UPDATER ---
-        print(f"Starte Auto-Update (Cache-Cleanup aktiv) alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
-        GLib.timeout_add(UPDATE_INTERVAL_SECONDS * 1000, self.auto_update_task)
+        if ENABLE_AUTO_UPDATE:
+            print(f"Starte Auto-Update (Cache-Cleanup aktiv) alle {UPDATE_INTERVAL_SECONDS} Sekunden...")
+            GLib.timeout_add(UPDATE_INTERVAL_SECONDS * 1000, self.auto_update_task)
+        else:
+            print("Auto-Update ist in der Konfiguration deaktiviert.")
 
     def get_raw_base_url(self, url, branch):
         url = url.strip()
